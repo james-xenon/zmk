@@ -55,11 +55,61 @@ static int vddh_sample_fetch(const struct device *dev, enum sensor_channel chan)
         return rc;
     }
 
-    drv_data->value.millivolts = val * VDDHDIV;
-    drv_data->value.state_of_charge = lithium_ion_mv_to_pct(drv_data->value.millivolts);
+static int32_t last_battery_mv = 0;
+static uint8_t last_battery_pct = 0;
 
-    LOG_DBG("ADC raw %d ~ %d mV => %d%%", drv_data->value.adc_raw, drv_data->value.millivolts,
-            drv_data->value.state_of_charge);
+
+/*
+ * nice!nano v2 USB charging compensation.
+ *
+ * VDDH is higher when USB is connected.
+ * Do not immediately convert charging voltage
+ * (~4.2V) into 100%.
+ */
+
+drv_data->value.millivolts = val * VDDHDIV;
+
+int32_t current_mv = drv_data->value.millivolts;
+uint8_t current_pct = lithium_ion_mv_to_pct(current_mv);
+
+
+/*
+ * Detect false USB voltage.
+ * Normal LiPo cannot jump instantly to 4200mV.
+ */
+
+if (current_mv >= 4150)
+{
+    if (last_battery_mv > 0)
+    {
+        /*
+         * Keep previous battery estimation
+         * while USB raises VDDH.
+         */
+        drv_data->value.millivolts = last_battery_mv;
+        drv_data->value.state_of_charge = last_battery_pct;
+    }
+    else
+    {
+        drv_data->value.state_of_charge = current_pct;
+    }
+}
+else
+{
+    /*
+     * Real battery voltage.
+     */
+    last_battery_mv = current_mv;
+    last_battery_pct = current_pct;
+
+    drv_data->value.state_of_charge = current_pct;
+}
+
+
+LOG_DBG("Battery: ADC %d raw, %d mV => %d%%",
+        drv_data->value.adc_raw,
+        drv_data->value.millivolts,
+        drv_data->value.state_of_charge);
 
     return rc;
 }
